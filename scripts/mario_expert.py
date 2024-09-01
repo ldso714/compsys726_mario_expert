@@ -1,11 +1,3 @@
-"""
-This the primary class for the Mario Expert agent. It contains the logic for the Mario Expert agent to play the game and choose actions.
-
-Your goal is to implement the functions and methods required to enable choose_action to select the best action for the agent to take.
-
-Original Mario Manual: https://www.thegameisafootarcade.com/wp-content/uploads/2017/04/Super-Mario-Land-Game-Manual.pdf
-"""
-
 import json
 import logging
 import random
@@ -42,7 +34,7 @@ class MarioController(MarioEnvironment):
         self.act_freq = act_freq
 
         # Example of valid actions based purely on the buttons you can press
-        valid_actions: list[WindowEvent] = [
+        self.valid_actions = [
             WindowEvent.PRESS_ARROW_DOWN,
             WindowEvent.PRESS_ARROW_LEFT,
             WindowEvent.PRESS_ARROW_RIGHT,
@@ -51,7 +43,7 @@ class MarioController(MarioEnvironment):
             WindowEvent.PRESS_BUTTON_B,
         ]
 
-        release_button: list[WindowEvent] = [
+        self.release_button = [
             WindowEvent.RELEASE_ARROW_DOWN,
             WindowEvent.RELEASE_ARROW_LEFT,
             WindowEvent.RELEASE_ARROW_RIGHT,
@@ -60,25 +52,48 @@ class MarioController(MarioEnvironment):
             WindowEvent.RELEASE_BUTTON_B,
         ]
 
-        self.valid_actions = valid_actions
-        self.release_button = release_button
+    def _press_buttons(self, buttons: list[WindowEvent]) -> None:
+        """Presses the given list of buttons."""
+        for button in buttons:
+            self.pyboy.send_input(button)
+        
+    def _release_buttons(self, buttons: list[WindowEvent]) -> None:
+        """Releases the given list of buttons."""
+        for button in buttons:
+            self.pyboy.send_input(button)
+
+    def _perform_action(self, duration: int) -> None:
+        """Performs an action for a given duration."""
+        for _ in range(duration):
+            self.pyboy.tick()
 
     def run_action(self, action: int) -> None:
         """
-        This is a very basic example of how this function could be implemented
+        Executes the action based on the provided action index.
 
-        As part of this assignment your job is to modify this function to better suit your needs
-
-        You can change the action type to whatever you want or need just remember the base control of the game is pushing buttons
+        Args:
+            action (int): The index representing the action to perform.
         """
+        if action == 6:
+            # Running jump
+            self._press_buttons([self.valid_actions[2], self.valid_actions[4]])
+            self._perform_action(self.act_freq)
+            self._release_buttons([self.release_button[2], self.release_button[4]])
+            self._perform_action(self.act_freq)
+        elif action == 7:
+            # Long running jump
+            self._press_buttons([self.valid_actions[2], self.valid_actions[4]])
+            self._perform_action(self.act_freq * 3)
+            self._release_buttons([self.release_button[2], self.release_button[4]])
+            self._perform_action(self.act_freq)
+        else:
+            # Default action
+            self._press_buttons([self.valid_actions[action]])
+            self._perform_action(self.act_freq)
+            self._release_buttons([self.release_button[action]])
+            if action == 4:
+                self.pyboy.tick()
 
-        # Simply toggles the buttons being on or off for a duration of act_freq
-        self.pyboy.send_input(self.valid_actions[action])
-
-        for _ in range(self.act_freq):
-            self.pyboy.tick()
-
-        self.pyboy.send_input(self.release_button[action])
 
 
 class MarioExpert:
@@ -101,26 +116,128 @@ class MarioExpert:
 
         self.video = None
 
-    def choose_action(self):
-        state = self.environment.game_state()
-        frame = self.environment.grab_frame()
-        game_area = self.environment.game_area()
+    def analyse_environment(self):
+        # Extracting the game area and setting up useful constants
+        game_area = self.environment.game_area().tolist()
+        game_area_transposed = self.environment.game_area().T.tolist()
 
-        # Implement your code here to choose the best action
-        # time.sleep(0.1)
-        return random.randint(0, len(self.environment.valid_actions) - 1)
+        constants = {
+            'DOWN': 0,
+            'LEFT': 1,
+            'RIGHT': 2,
+            'UP': 3,
+            'BUTTON_A': 4,
+            'BUTTON_B': 5,
+            'RUN_JUMP': 6,
+            'LONG_JUMP': 7,
+            'EMPTY': 0,
+            'MARIO': 1,
+            'COIN': 5,
+            'MUSHROOM': 6,
+            'GROUND': 10,
+            'PLATFORM': 11,
+            'BLOCK': 12,
+            'COIN_BLOCK': 13,
+            'PIPE': 14,
+            'GOOMBA': 15,
+            'KOOPA': 16,
+            'FLY': 18,
+        }
+
+        return game_area, game_area_transposed, constants
+
+    def find_mario(self, game_area):
+        for x_index, x_row in enumerate(game_area):
+            if 1 in x_row:  # MARIO
+                return x_index, x_row.index(1)
+        return -1, -1
+
+    def locate_entities(self, game_area, entity_value):
+        entities = []
+        for x_index, x_row in enumerate(game_area):
+            for y_index, cell in enumerate(x_row):
+                if cell == entity_value:
+                    entities.append((x_index, y_index))
+        return entities
+
+    def choose_action(self, mario_pos, game_area, game_area_transposed, constants):
+        mario_x, mario_y = mario_pos
+        if mario_x == -1 or mario_y == -1:
+            return random.randint(0, len(self.environment.valid_actions) - 1)  # Default random action
+
+        # Locate Goombas
+        goombas = self.locate_entities(game_area, constants['GOOMBA'])
+        if goombas:
+            for goomba_x, goomba_y in goombas:
+                # Check if Goomba is directly in Mario's path
+                if mario_x + 1 == goomba_x and mario_y == goomba_y:
+                    return 1  # Move Left to avoid Goomba
+
+        # Check if Mario is stuck
+        if (mario_x + 1 < len(game_area) and
+            mario_y < len(game_area[0]) and
+            game_area[mario_x + 1][mario_y] == constants['GROUND'] and
+            (mario_y - 1 >= 0 and game_area[mario_x][mario_y - 1] == constants['GROUND']) and
+            (mario_y + 1 < len(game_area[0]) and game_area[mario_x][mario_y + 1] == constants['GROUND']) and
+            (mario_x - 1 >= 0 and game_area[mario_x - 1][mario_y] == constants['GROUND'])):
+            
+            # Move left until there's a 0 above Mario
+            while mario_x - 1 >= 0 and game_area[mario_x - 1][mario_y] != constants['EMPTY']:
+                mario_x -= 1
+                return 1  # Move Left
+
+            # After clearing the path, jump to the right
+            return 4  # Jump
+
+        # Check for gaps and perform a long jump if necessary
+        if mario_x <= len(game_area) - 3 and mario_y <= len(game_area[0]) - 2:
+            if (mario_x + 1 < len(game_area) and mario_y < len(game_area[0]) and
+                mario_x + 2 < len(game_area) and mario_y < len(game_area[0]) and
+                game_area[mario_x + 1][mario_y] == constants['EMPTY'] and
+                game_area[mario_x + 2][mario_y] == constants['EMPTY']):
+                
+                # Check if landing spot is safe
+                if mario_x + 3 < len(game_area) and mario_y < len(game_area[0]) and game_area[mario_x + 3][mario_y] == constants['GOOMBA']:
+                    return 1  # Move Left to avoid landing on Goomba
+
+                if mario_x + 3 < len(game_area) and mario_y < len(game_area[0]) and game_area[mario_x + 3][mario_y] in [constants['PIPE'], constants['BLOCK']]:
+                    return 7  # Long Jump
+
+                # If the gap is too wide or deep
+                if mario_x + 2 < len(game_area) and mario_y < len(game_area[0]) and game_area[mario_x + 2][mario_y] == constants['EMPTY']:
+                    return 6  # Long Jump into the pit and proceed
+
+        # Adjust jumping logic to handle obstacles and gaps
+        if mario_x <= len(game_area) - 3 and mario_y <= len(game_area[0]) - 2:
+            if (mario_x + 1 < len(game_area) and mario_y + 2 < len(game_area[0]) and
+                game_area[mario_x + 1][mario_y + 2] in [constants['PIPE'], constants['GROUND']] or
+                mario_x < len(game_area) and mario_y + 2 < len(game_area[0]) and
+                game_area[mario_x][mario_y + 2] in [constants['PIPE'], constants['GROUND']]):
+                return 7  # Long Jump over obstacle
+
+            if mario_x + 1 < len(game_area) and mario_y + 2 < len(game_area[0]) and (
+                game_area[mario_x + 1][mario_y + 2] == constants['PIPE'] or
+                game_area[mario_x + 1][mario_y + 2] == constants['GROUND']):
+                return 6  # Run Jump
+                
+            if mario_x + 2 < len(game_area) and mario_y < len(game_area[0]) and (
+                game_area[mario_x + 2][mario_y] == constants['GROUND'] and
+                mario_x + 3 < len(game_area) and game_area[mario_x + 3][mario_y] == constants['GROUND']):
+                return 7  # Run Jump
+
+            if mario_x < len(game_area) and mario_y + 2 < len(game_area[0]) and (
+                game_area[mario_x][mario_y + 2] == constants['GROUND'] and
+                mario_x + 1 < len(game_area) and mario_y + 2 < len(game_area[0]) and
+                game_area[mario_x + 1][mario_y + 2] == constants['EMPTY']):
+                return 4  # Jump
+
+        return 2  # Default move right
+
 
     def step(self):
-        """
-        Modify this function as required to implement the Mario Expert agent's logic.
-
-        This is just a very basic example
-        """
-
-        # Choose an action - button press or other...
-        action = self.choose_action()
-
-        # Run the action on the environment
+        game_area, game_area_transposed, constants = self.analyse_environment()
+        mario_pos = self.find_mario(game_area)
+        action = self.choose_action(mario_pos, game_area, game_area_transposed, constants)
         self.environment.run_action(action)
 
     def play(self):
